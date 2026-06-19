@@ -1,0 +1,716 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>نظام إدارة إجازات العساكر</title>
+<script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+<style>
+  html, body { margin: 0; padding: 0; }
+  * { box-sizing: border-box; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel" data-presets="react">
+const { useState, useRef, useCallback, useEffect } = React;
+
+// ==================== HELPERS ====================
+function addDays(dateStr, days) {
+  if (!dateStr) return "";
+  const d = new Date(dateStr);
+  d.setDate(d.getDate() + days);
+  return d.toISOString().split("T")[0];
+}
+
+function formatDateAr(dateStr) {
+  if (!dateStr) return "—";
+  const d = new Date(dateStr);
+  return d.toLocaleDateString("ar-EG", { year: "numeric", month: "long", day: "numeric" });
+}
+
+function calcServiceEnd(startStr) {
+  if (!startStr) return "";
+  const d = new Date(startStr);
+  d.setFullYear(d.getFullYear() + 3);
+  return d.toISOString().split("T")[0];
+}
+
+function getEffectiveLeaveStart(s) {
+  if (!s.leaveStart) return "";
+  const totalDeducted = (s.deductions || []).reduce((sum, d) => sum + d.days, 0);
+  return addDays(s.leaveStart, totalDeducted);
+}
+
+function getRemainingLeave(s) {
+  const totalDeducted = (s.deductions || []).reduce((sum, d) => sum + d.days, 0);
+  return 15 - totalDeducted;
+}
+
+function getReturnDate(s) {
+  const effectiveStart = getEffectiveLeaveStart(s);
+  if (!effectiveStart) return "";
+  const remaining = getRemainingLeave(s);
+  return addDays(effectiveStart, remaining - 1);
+}
+
+const STORAGE_KEY = "military_app_soldiers";
+const LOGO_KEY = "military_app_logo";
+
+const initialSoldiers = [
+  { id: 1, name: "احمد السيد على", photo: null, idCardPhoto: null, serviceStart: "", leaveStart: "", deductions: [], notes: "" },
+  { id: 2, name: "اشرف ياسر", photo: null, idCardPhoto: null, serviceStart: "", leaveStart: "", deductions: [], notes: "" },
+  { id: 3, name: "احمد محسن", photo: null, idCardPhoto: null, serviceStart: "", leaveStart: "", deductions: [], notes: "" },
+  { id: 4, name: "محمود على", photo: null, idCardPhoto: null, serviceStart: "", leaveStart: "", deductions: [], notes: "" },
+  { id: 5, name: "اسلام ماهر", photo: null, idCardPhoto: null, serviceStart: "", leaveStart: "", deductions: [], notes: "" },
+];
+
+const colors = {
+  navy: "#0a1628", navyMid: "#122040", gold: "#c9a227",
+  goldLight: "#e8c547", white: "#ffffff",
+  green: "#1a6b3a", greenLight: "#22883f", red: "#c0392b",
+};
+
+const S = {
+  root: {
+    minHeight: "100vh",
+    background: `linear-gradient(160deg, ${colors.navy} 0%, ${colors.navyMid} 60%, #1a2e4a 100%)`,
+    fontFamily: "'Segoe UI', Tahoma, Geneva, Verdana, sans-serif",
+    direction: "rtl", color: colors.white,
+  },
+  header: {
+    background: `linear-gradient(90deg, ${colors.navy} 0%, ${colors.navyMid} 50%, ${colors.navy} 100%)`,
+    borderBottom: `3px solid ${colors.gold}`,
+    boxShadow: "0 4px 20px rgba(0,0,0,0.5)",
+  },
+  headerInner: {
+    maxWidth: 900, margin: "0 auto", padding: "14px 20px",
+    display: "flex", alignItems: "center", gap: 14,
+  },
+  dividerGold: { height: 2, background: `linear-gradient(90deg, transparent, ${colors.gold}, transparent)` },
+  container: { maxWidth: 900, margin: "0 auto", padding: "20px 16px" },
+  card: {
+    background: "rgba(255,255,255,0.06)", border: "1px solid rgba(201,162,39,0.25)",
+    borderRadius: 12, padding: 16, marginBottom: 12,
+    backdropFilter: "blur(10px)", cursor: "pointer", transition: "all 0.2s",
+  },
+  avatar: {
+    borderRadius: "50%",
+    background: `linear-gradient(135deg, ${colors.navyMid}, #2a4a7a)`,
+    border: `2px solid ${colors.gold}`,
+    display: "flex", alignItems: "center", justifyContent: "center",
+    overflow: "hidden", flexShrink: 0,
+  },
+  badge: (color) => ({
+    display: "inline-block", background: color, color: colors.white,
+    borderRadius: 6, padding: "2px 10px", fontSize: 11, fontWeight: 700, marginTop: 4,
+  }),
+  btn: (bg, color = "#fff") => ({
+    background: bg, color, border: "none", borderRadius: 8,
+    padding: "9px 18px", fontSize: 13, fontWeight: 700, cursor: "pointer",
+  }),
+  input: {
+    width: "100%", background: "rgba(255,255,255,0.08)",
+    border: "1px solid rgba(201,162,39,0.3)", borderRadius: 8,
+    padding: "10px 12px", color: colors.white, fontSize: 14,
+    outline: "none", boxSizing: "border-box", direction: "rtl",
+  },
+  label: { fontSize: 12, color: colors.gold, fontWeight: 700, marginBottom: 4, display: "block" },
+  infoBox: {
+    flex: 1, minWidth: 130,
+    background: "rgba(255,255,255,0.05)", border: "1px solid rgba(201,162,39,0.2)",
+    borderRadius: 10, padding: "12px 14px",
+  },
+  infoLabel: { fontSize: 11, color: colors.gold, fontWeight: 700, marginBottom: 4 },
+  infoValue: { fontSize: 13, color: colors.white, fontWeight: 600 },
+  sectionTitle: {
+    fontSize: 14, color: colors.gold, fontWeight: 800, marginBottom: 10,
+    borderBottom: "1px solid rgba(201,162,39,0.3)", paddingBottom: 6,
+  },
+  deductRow: {
+    display: "flex", alignItems: "center", justifyContent: "space-between",
+    background: "rgba(192,57,43,0.15)", border: "1px solid rgba(192,57,43,0.3)",
+    borderRadius: 8, padding: "8px 12px", marginBottom: 6,
+  },
+  modalOverlay: {
+    position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)",
+    display: "flex", alignItems: "center", justifyContent: "center",
+    zIndex: 1000, padding: 20,
+  },
+  modalBox: {
+    background: "#122040", border: `2px solid ${colors.gold}`,
+    borderRadius: 14, padding: 24, maxWidth: 340, width: "100%", textAlign: "center",
+  },
+  remainBig: (days) => ({
+    fontSize: 44, fontWeight: 900, lineHeight: 1, textAlign: "center",
+    color: days > 7 ? colors.goldLight : days > 3 ? "#f39c12" : colors.red,
+  }),
+};
+
+// ==================== LOGO ====================
+function LogoDisplay({ size = 70, logoImage }) {
+  return (
+    <div style={{
+      width: size, height: size, borderRadius: "50%",
+      border: `3px solid ${colors.gold}`,
+      display: "flex", alignItems: "center", justifyContent: "center",
+      flexShrink: 0, overflow: "hidden",
+      boxShadow: "0 0 20px rgba(201,162,39,0.4)",
+      background: logoImage ? "#000" : `radial-gradient(circle at 40% 35%, ${colors.goldLight}, ${colors.gold} 60%, #8B6914)`,
+    }}>
+      {logoImage ? (
+        <img src={logoImage} alt="logo" style={{ width: "100%", height: "100%", objectFit: "contain" }} />
+      ) : (
+        <svg viewBox="0 0 70 70" width={size} height={size}>
+          <circle cx="35" cy="35" r="33" fill="none" stroke="#0a1628" strokeWidth="2" />
+          <circle cx="30" cy="28" r="10" fill="none" stroke="#0a1628" strokeWidth="3" />
+          <line x1="37" y1="35" x2="48" y2="46" stroke="#0a1628" strokeWidth="3.5" strokeLinecap="round" />
+          <path d="M15 50 Q20 44 25 50 Q30 56 35 50" fill="none" stroke="#0a1628" strokeWidth="1.8" />
+          <path d="M15 45 Q20 39 25 45 Q30 51 35 45" fill="none" stroke="#0a1628" strokeWidth="1.8" />
+          <polygon points="35,5 37.5,12 45,12 39,16.5 41.5,24 35,19.5 28.5,24 31,16.5 25,12 32.5,12" fill="#0a1628" />
+          <text x="35" y="63" textAnchor="middle" fontSize="5.5" fill="#0a1628" fontWeight="bold">الأدلة الجنائية</text>
+        </svg>
+      )}
+    </div>
+  );
+}
+
+// ==================== DETAIL VIEW ====================
+function DetailView({ soldier, onUpdate, onDelete, onBack }) {
+  const [showDeductForm, setShowDeductForm] = useState(false);
+  const [deductionInput, setDeductionInput] = useState({ days: "", reason: "" });
+  const [idCardZoom, setIdCardZoom] = useState(false);
+  const [deleteConfirm, setDeleteConfirm] = useState(false);
+
+  const photoInputRef = useRef();
+  const idCardInputRef = useRef();
+
+  const s = soldier;
+  const remaining = getRemainingLeave(s);
+  const totalDeducted = (s.deductions || []).reduce((sum, d) => sum + d.days, 0);
+  const effectiveStart = getEffectiveLeaveStart(s);
+  const returnDate = getReturnDate(s);
+  const serviceEnd = calcServiceEnd(s.serviceStart);
+
+  function handlePhotoUpload(e, field) {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = ev => onUpdate({ [field]: ev.target.result });
+    reader.readAsDataURL(file);
+    e.target.value = "";
+  }
+
+  function handleAddDeduction() {
+    const days = parseInt(deductionInput.days);
+    if (!days || days < 1) return;
+    const deduction = {
+      id: Date.now(), days,
+      reason: deductionInput.reason || "خصم إجازة",
+      date: new Date().toISOString().split("T")[0]
+    };
+    onUpdate({ deductions: [...(s.deductions || []), deduction] });
+    setDeductionInput({ days: "", reason: "" });
+    setShowDeductForm(false);
+  }
+
+  function handleRemoveDeduction(deductId) {
+    onUpdate({ deductions: s.deductions.filter(d => d.id !== deductId) });
+  }
+
+  return (
+    <div style={S.container}>
+      <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+        <button style={S.btn("rgba(255,255,255,0.1)")} onClick={onBack}>← رجوع</button>
+        <button style={S.btn("rgba(192,57,43,0.6)")} onClick={() => setDeleteConfirm(true)}>🗑️ حذف العسكري</button>
+      </div>
+
+      {deleteConfirm && (
+        <div style={S.modalOverlay}>
+          <div style={S.modalBox}>
+            <div style={{ fontSize: 36, marginBottom: 12 }}>⚠️</div>
+            <div style={{ fontSize: 16, fontWeight: 800, color: colors.gold, marginBottom: 8 }}>حذف العسكري</div>
+            <div style={{ fontSize: 13, color: "#a0b0c8", marginBottom: 20 }}>هل تريد حذف "{s.name}" من القائمة؟</div>
+            <div style={{ display: "flex", gap: 10 }}>
+              <button style={{ ...S.btn("rgba(192,57,43,0.9)"), flex: 1 }} onClick={onDelete}>نعم، احذف</button>
+              <button style={{ ...S.btn("rgba(255,255,255,0.1)"), flex: 1 }} onClick={() => setDeleteConfirm(false)}>إلغاء</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* الصورة الشخصية */}
+      <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 14, background: "rgba(255,255,255,0.04)", borderRadius: 14, padding: 14, border: "1px solid rgba(201,162,39,0.2)" }}>
+        <div style={{ ...S.avatar, width: 86, height: 86, fontSize: 32, cursor: "pointer", position: "relative" }}
+          onClick={() => photoInputRef.current.click()}>
+          {s.photo
+            ? <img src={s.photo} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+            : <span>👤</span>}
+          <div style={{ position: "absolute", bottom: 0, right: 0, background: colors.gold, borderRadius: "50%", width: 22, height: 22, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11 }}>📷</div>
+          <input ref={photoInputRef} type="file" accept="image/*" style={{ display: "none" }}
+            onChange={e => handlePhotoUpload(e, "photo")} />
+        </div>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 19, fontWeight: 900, color: colors.gold, marginBottom: 2 }}>{s.name}</div>
+          <div style={{ fontSize: 11, color: "#8090a8" }}>اضغط الصورة لتغييرها</div>
+        </div>
+        <div style={{ textAlign: "center", background: "rgba(0,0,0,0.3)", borderRadius: 12, padding: "10px 18px", border: "1px solid rgba(201,162,39,0.3)" }}>
+          <div style={S.remainBig(remaining)}>{remaining}</div>
+          <div style={{ fontSize: 11, color: colors.gold, fontWeight: 700 }}>يوم متبقي</div>
+        </div>
+      </div>
+
+      {/* صورة البطاقة */}
+      <div style={{ marginBottom: 14 }}>
+        <div style={S.sectionTitle}>🪪 صورة البطاقة العسكرية</div>
+        {s.idCardPhoto ? (
+          <div>
+            <div style={{ borderRadius: 10, overflow: "hidden", border: "2px solid rgba(201,162,39,0.4)", cursor: "pointer", position: "relative" }}
+              onClick={() => setIdCardZoom(!idCardZoom)}>
+              <img src={s.idCardPhoto} alt="بطاقة"
+                style={{ width: "100%", maxHeight: idCardZoom ? 380 : 130, objectFit: idCardZoom ? "contain" : "cover", transition: "max-height 0.3s", background: "#000" }} />
+              <div style={{ position: "absolute", bottom: 6, left: 6, background: "rgba(0,0,0,0.65)", borderRadius: 6, padding: "3px 8px", fontSize: 11 }}>
+                {idCardZoom ? "🔍 تصغير" : "🔍 تكبير"}
+              </div>
+            </div>
+            <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+              <button style={{ ...S.btn("rgba(201,162,39,0.2)"), fontSize: 12, padding: "6px 12px", flex: 1 }}
+                onClick={() => idCardInputRef.current.click()}>🔄 تغيير</button>
+              <button style={{ ...S.btn("rgba(192,57,43,0.4)"), fontSize: 12, padding: "6px 12px" }}
+                onClick={() => onUpdate({ idCardPhoto: null })}>🗑️</button>
+            </div>
+          </div>
+        ) : (
+          <div style={{ border: "2px dashed rgba(201,162,39,0.4)", borderRadius: 10, padding: "24px 20px", textAlign: "center", cursor: "pointer" }}
+            onClick={() => idCardInputRef.current.click()}>
+            <div style={{ fontSize: 32, marginBottom: 8 }}>🪪</div>
+            <div style={{ color: colors.gold, fontWeight: 700, fontSize: 14 }}>اضغط لرفع صورة البطاقة</div>
+          </div>
+        )}
+        <input ref={idCardInputRef} type="file" accept="image/*" style={{ display: "none" }}
+          onChange={e => handlePhotoUpload(e, "idCardPhoto")} />
+      </div>
+
+      {/* بيانات الخدمة */}
+      <div style={{ marginBottom: 14 }}>
+        <div style={S.sectionTitle}>⚔️ بيانات الخدمة العسكرية</div>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+          <div style={{ flex: 1, minWidth: 170 }}>
+            <label style={S.label}>تاريخ بداية الخدمة</label>
+            <input type="date" style={S.input} value={s.serviceStart}
+              onChange={e => onUpdate({ serviceStart: e.target.value })} />
+          </div>
+          <div style={{ flex: 1, minWidth: 170 }}>
+            <div style={S.infoBox}>
+              <div style={S.infoLabel}>📅 تاريخ انهاء الخدمة (3 سنوات)</div>
+              <div style={{ ...S.infoValue, color: colors.goldLight }}>
+                {serviceEnd ? formatDateAr(serviceEnd) : "أدخل تاريخ البداية"}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* بيانات الإجازة */}
+      <div style={{ marginBottom: 14 }}>
+        <div style={S.sectionTitle}>🏖️ بيانات الإجازة</div>
+        <div style={{ background: "rgba(201,162,39,0.1)", border: "1px solid rgba(201,162,39,0.25)", borderRadius: 8, padding: "8px 12px", marginBottom: 10, fontSize: 12, color: colors.goldLight }}>
+          ℹ️ يوم النزول محسوب من ضمن الإجازة — الإجمالي 15 يوماً. عند الخصم يتأجل تاريخ النزول تلقائياً.
+        </div>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
+          <div style={{ flex: 1, minWidth: 160 }}>
+            <label style={S.label}>تاريخ النزول المقرر</label>
+            <input type="date" style={S.input} value={s.leaveStart}
+              onChange={e => onUpdate({ leaveStart: e.target.value })} />
+          </div>
+          <div style={{ flex: 1, minWidth: 160 }}>
+            <div style={S.infoBox}>
+              <div style={S.infoLabel}>{totalDeducted > 0 ? "📌 تاريخ النزول الفعلي (بعد الخصم)" : "📌 تاريخ النزول الفعلي"}</div>
+              <div style={{ ...S.infoValue, color: totalDeducted > 0 ? "#f39c12" : colors.goldLight, fontSize: 15 }}>
+                {s.leaveStart ? formatDateAr(effectiveStart) : "—"}
+              </div>
+              {totalDeducted > 0 && s.leaveStart && (
+                <div style={{ fontSize: 11, color: "#e74c3c", marginTop: 3 }}>تأجل {totalDeducted} يوم بسبب الخصم</div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
+          <div style={S.infoBox}>
+            <div style={S.infoLabel}>🟢 إجمالي الإجازة</div>
+            <div style={S.infoValue}>15 يوم</div>
+          </div>
+          <div style={S.infoBox}>
+            <div style={S.infoLabel}>🔴 الخصومات</div>
+            <div style={{ ...S.infoValue, color: "#e74c3c" }}>{totalDeducted} يوم</div>
+          </div>
+          <div style={S.infoBox}>
+            <div style={S.infoLabel}>✅ المتبقي</div>
+            <div style={{ ...S.infoValue, color: remaining > 7 ? colors.goldLight : remaining > 3 ? "#f39c12" : "#e74c3c" }}>
+              {remaining} يوم
+            </div>
+          </div>
+        </div>
+
+        {returnDate && (
+          <div style={{ background: "rgba(26,107,58,0.2)", border: "1px solid rgba(26,107,58,0.5)", borderRadius: 10, padding: "12px 16px" }}>
+            <div style={{ fontSize: 12, color: "#52d68a", fontWeight: 700, marginBottom: 4 }}>
+              🚪 تاريخ العودة {totalDeducted > 0 ? "(بعد الخصم)" : ""}
+            </div>
+            <div style={{ fontSize: 19, color: colors.white, fontWeight: 800 }}>{formatDateAr(returnDate)}</div>
+            {s.leaveStart && (
+              <div style={{ fontSize: 11, color: "#8090a8", marginTop: 4 }}>
+                من {formatDateAr(effectiveStart)} ← {formatDateAr(returnDate)} = {remaining} يوم شاملاً يوم النزول
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* الخصومات */}
+      <div style={{ marginBottom: 14 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div style={S.sectionTitle}>✂️ خصم من الإجازة</div>
+          <button style={S.btn("rgba(192,57,43,0.75)")} onClick={() => setShowDeductForm(!showDeductForm)}>
+            {showDeductForm ? "إلغاء" : "+ خصم"}
+          </button>
+        </div>
+
+        {showDeductForm && (
+          <div style={{ background: "rgba(192,57,43,0.1)", border: "1px solid rgba(192,57,43,0.3)", borderRadius: 10, padding: 14, marginBottom: 12 }}>
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+              <div style={{ flex: 1, minWidth: 90 }}>
+                <label style={S.label}>الأيام</label>
+                <input type="number" min="1" max={remaining} style={S.input}
+                  placeholder="أيام" value={deductionInput.days}
+                  onChange={e => setDeductionInput(p => ({ ...p, days: e.target.value }))} />
+              </div>
+              <div style={{ flex: 2, minWidth: 150 }}>
+                <label style={S.label}>السبب</label>
+                <input type="text" style={S.input} placeholder="سبب الخصم"
+                  value={deductionInput.reason}
+                  onChange={e => setDeductionInput(p => ({ ...p, reason: e.target.value }))} />
+              </div>
+            </div>
+            <button style={{ ...S.btn(`linear-gradient(135deg, ${colors.red}, #e74c3c)`), marginTop: 10, width: "100%" }}
+              onClick={handleAddDeduction}>تأكيد الخصم</button>
+          </div>
+        )}
+
+        {(s.deductions || []).length === 0 && !showDeductForm && (
+          <div style={{ textAlign: "center", color: "#6b7280", padding: 14, fontSize: 13 }}>لا توجد خصومات</div>
+        )}
+
+        {(s.deductions || []).map(d => (
+          <div key={d.id} style={S.deductRow}>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 600 }}>{d.reason}</div>
+              <div style={{ fontSize: 11, color: "#8090a8" }}>{formatDateAr(d.date)}</div>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <span style={{ color: "#e74c3c", fontWeight: 800 }}>- {d.days} يوم</span>
+              <button style={{ background: "none", border: "none", color: "#e74c3c", cursor: "pointer", fontSize: 17 }}
+                onClick={() => handleRemoveDeduction(d.id)}>✕</button>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* ملاحظات */}
+      <div>
+        <div style={S.sectionTitle}>📝 ملاحظات</div>
+        <textarea
+          style={{ ...S.input, height: 90, resize: "vertical" }}
+          placeholder="أي ملاحظات إضافية..."
+          value={s.notes}
+          onChange={e => onUpdate({ notes: e.target.value })}
+        />
+      </div>
+    </div>
+  );
+}
+
+// ==================== SETTINGS VIEW ====================
+function SettingsView({ logoImage, setLogoImage, onClearAll, onBack }) {
+  const logoInputRef = useRef();
+
+  function handleLogoUpload(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = ev => setLogoImage(ev.target.result);
+    reader.readAsDataURL(file);
+    e.target.value = "";
+  }
+
+  return (
+    <div style={S.container}>
+      <div style={{ marginBottom: 16 }}>
+        <button style={S.btn("rgba(255,255,255,0.1)")} onClick={onBack}>← رجوع</button>
+      </div>
+
+      <div style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(201,162,39,0.3)", borderRadius: 14, padding: 20, marginBottom: 14 }}>
+        <div style={S.sectionTitle}>🎖️ لوجو الإدارة</div>
+        <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 14 }}>
+          <LogoDisplay size={80} logoImage={logoImage} />
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 13, color: "#a0b0c8", marginBottom: 10 }}>
+              {logoImage ? "لوجو مخصص مرفوع" : "يستخدم اللوجو الافتراضي حالياً"}
+            </div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <button style={S.btn(`linear-gradient(135deg, ${colors.gold}, #a07810)`, colors.navy)}
+                onClick={() => logoInputRef.current.click()}>
+                📁 رفع لوجو جديد
+              </button>
+              {logoImage && (
+                <button style={S.btn("rgba(192,57,43,0.7)")} onClick={() => setLogoImage(null)}>
+                  ↩️ الافتراضي
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+        <div style={{ fontSize: 11, color: "#6b7280" }}>يدعم JPG, PNG, SVG — يُفضل صورة مربعة</div>
+        <input ref={logoInputRef} type="file" accept="image/*" style={{ display: "none" }} onChange={handleLogoUpload} />
+      </div>
+
+      <div style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(192,57,43,0.3)", borderRadius: 14, padding: 20 }}>
+        <div style={{ ...S.sectionTitle, color: "#e74c3c", borderColor: "rgba(192,57,43,0.3)" }}>⚠️ منطقة الخطر</div>
+        <div style={{ fontSize: 13, color: "#a0b0c8", marginBottom: 14 }}>
+          حذف جميع العساكر من القائمة. لا يمكن التراجع.
+        </div>
+        <button style={{ ...S.btn("rgba(192,57,43,0.8)"), width: "100%" }} onClick={onClearAll}>
+          🗑️ مسح جميع العساكر
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ==================== ADD VIEW ====================
+function AddView({ onAdd, onBack }) {
+  const [name, setName] = useState("");
+  function handleAdd() {
+    if (!name.trim()) return;
+    onAdd(name.trim());
+    setName("");
+  }
+  return (
+    <div style={S.container}>
+      <div style={{ marginBottom: 16 }}>
+        <button style={S.btn("rgba(255,255,255,0.1)")} onClick={onBack}>← رجوع</button>
+      </div>
+      <div style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(201,162,39,0.3)", borderRadius: 14, padding: 20 }}>
+        <div style={S.sectionTitle}>إضافة عسكري جديد</div>
+        <label style={S.label}>الاسم الكامل</label>
+        <input type="text" style={{ ...S.input, marginBottom: 16 }} placeholder="أدخل اسم العسكري"
+          value={name} onChange={e => setName(e.target.value)}
+          onKeyDown={e => e.key === "Enter" && handleAdd()} />
+        <button style={{ ...S.btn(`linear-gradient(135deg, ${colors.green}, ${colors.greenLight})`), width: "100%" }}
+          onClick={handleAdd}>إضافة</button>
+      </div>
+    </div>
+  );
+}
+
+// ==================== LIST VIEW ====================
+function ListView({ soldiers, onSelect, onAdd, onClearAll }) {
+  const [hoveredId, setHoveredId] = useState(null);
+  const [confirmClear, setConfirmClear] = useState(false);
+
+  return (
+    <div style={S.container}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+        <div>
+          <div style={{ fontSize: 18, fontWeight: 800, color: colors.gold }}>قائمة العساكر</div>
+          <div style={{ fontSize: 12, color: "#8090a8", marginTop: 2 }}>{soldiers.length} عنصر مسجل</div>
+        </div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button style={S.btn(`linear-gradient(135deg, ${colors.green}, ${colors.greenLight})`)} onClick={onAdd}>+ إضافة</button>
+          {soldiers.length > 0 && (
+            <button style={S.btn("rgba(192,57,43,0.7)")} onClick={() => setConfirmClear(true)}>🗑️ مسح الكل</button>
+          )}
+        </div>
+      </div>
+
+      {soldiers.length === 0 && (
+        <div style={{ textAlign: "center", padding: "60px 20px", color: "#6b7280" }}>
+          <div style={{ fontSize: 48, marginBottom: 12 }}>👥</div>
+          <div style={{ fontSize: 16, color: "#8090a8" }}>لا يوجد عساكر مسجلين</div>
+          <div style={{ fontSize: 13, marginTop: 6 }}>اضغط "إضافة" لإضافة عنصر جديد</div>
+        </div>
+      )}
+
+      {soldiers.map(s => {
+        const remaining = getRemainingLeave(s);
+        const totalDeducted = (s.deductions || []).reduce((sum, d) => sum + d.days, 0);
+        const effectiveStart = getEffectiveLeaveStart(s);
+        const returnDate = getReturnDate(s);
+        return (
+          <div key={s.id}
+            style={{ ...S.card, ...(hoveredId === s.id ? { background: "rgba(201,162,39,0.12)", border: `1px solid ${colors.gold}` } : {}) }}
+            onMouseEnter={() => setHoveredId(s.id)}
+            onMouseLeave={() => setHoveredId(null)}
+            onClick={() => onSelect(s.id)}>
+            <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+              <div style={{ ...S.avatar, width: 54, height: 54, fontSize: 22 }}>
+                {s.photo ? <img src={s.photo} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : "👤"}
+              </div>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 16, fontWeight: 700 }}>{s.name}</div>
+                <div style={{ display: "flex", gap: 6, marginTop: 5, flexWrap: "wrap" }}>
+                  {s.leaveStart && <span style={S.badge("rgba(26,107,58,0.75)")}>نزول: {formatDateAr(totalDeducted > 0 ? effectiveStart : s.leaveStart)}</span>}
+                  {returnDate && <span style={S.badge("rgba(201,162,39,0.75)")}>عودة: {formatDateAr(returnDate)}</span>}
+                  <span style={S.badge(remaining > 7 ? "rgba(26,107,58,0.75)" : remaining > 3 ? "rgba(243,156,18,0.75)" : "rgba(192,57,43,0.75)")}>
+                    متبقي: {remaining} يوم
+                  </span>
+                </div>
+              </div>
+              <div style={{ color: colors.gold, fontSize: 20 }}>‹</div>
+            </div>
+          </div>
+        );
+      })}
+
+      {confirmClear && (
+        <div style={S.modalOverlay}>
+          <div style={S.modalBox}>
+            <div style={{ fontSize: 36, marginBottom: 12 }}>⚠️</div>
+            <div style={{ fontSize: 16, fontWeight: 800, color: colors.gold, marginBottom: 8 }}>تأكيد مسح الكل</div>
+            <div style={{ fontSize: 13, color: "#a0b0c8", marginBottom: 20 }}>هل أنت متأكد من حذف جميع العساكر؟</div>
+            <div style={{ display: "flex", gap: 10 }}>
+              <button style={{ ...S.btn("rgba(192,57,43,0.9)"), flex: 1 }} onClick={() => { onClearAll(); setConfirmClear(false); }}>نعم، امسح الكل</button>
+              <button style={{ ...S.btn("rgba(255,255,255,0.1)"), flex: 1 }} onClick={() => setConfirmClear(false)}>إلغاء</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ==================== APP ====================
+function App() {
+  const [soldiers, setSoldiers] = useState(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY);
+      return saved ? JSON.parse(saved) : initialSoldiers;
+    } catch (e) {
+      return initialSoldiers;
+    }
+  });
+  const [selected, setSelected] = useState(null);
+  const [view, setView] = useState("list");
+  const [logoImage, setLogoImage] = useState(() => {
+    try { return localStorage.getItem(LOGO_KEY) || null; } catch (e) { return null; }
+  });
+
+  useEffect(() => {
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(soldiers)); } catch (e) {}
+  }, [soldiers]);
+
+  useEffect(() => {
+    try {
+      if (logoImage) localStorage.setItem(LOGO_KEY, logoImage);
+      else localStorage.removeItem(LOGO_KEY);
+    } catch (e) {}
+  }, [logoImage]);
+
+  const selectedSoldier = soldiers.find(s => s.id === selected);
+
+  const updateSoldier = useCallback((id, fields) => {
+    setSoldiers(prev => prev.map(s => s.id === id ? { ...s, ...fields } : s));
+  }, []);
+
+  function handleSelect(id) {
+    setSelected(id);
+    setView("detail");
+  }
+
+  function handleAddSoldier(name) {
+    setSoldiers(prev => [...prev, {
+      id: Date.now(), name,
+      photo: null, idCardPhoto: null,
+      serviceStart: "", leaveStart: "",
+      deductions: [], notes: ""
+    }]);
+    setView("list");
+  }
+
+  function handleDeleteSoldier() {
+    setSoldiers(prev => prev.filter(s => s.id !== selected));
+    setSelected(null);
+    setView("list");
+  }
+
+  function handleClearAll() {
+    setSoldiers([]);
+    setSelected(null);
+    setView("list");
+  }
+
+  return (
+    <div style={S.root}>
+      {/* Header */}
+      <div style={S.header}>
+        <div style={S.headerInner}>
+          <LogoDisplay size={68} logoImage={logoImage} />
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 17, fontWeight: 800, color: colors.gold, letterSpacing: 0.5 }}>
+              الإدارة العامة لتحقيق الأدلة الجنائية
+            </div>
+            <div style={{ fontSize: 11, color: "#a0b0c8", marginTop: 2 }}>نظام إدارة إجازات العساكر</div>
+          </div>
+          <button
+            style={{ background: view === "settings" ? "rgba(201,162,39,0.2)" : "rgba(255,255,255,0.07)", border: `1px solid ${view === "settings" ? colors.gold : "rgba(255,255,255,0.1)"}`, borderRadius: 8, padding: "8px 12px", color: colors.gold, cursor: "pointer", fontSize: 18 }}
+            onClick={() => setView(view === "settings" ? "list" : "settings")}>
+            ⚙️
+          </button>
+        </div>
+        <div style={S.dividerGold} />
+      </div>
+
+      {view === "list" && (
+        <ListView
+          soldiers={soldiers}
+          onSelect={handleSelect}
+          onAdd={() => setView("add")}
+          onClearAll={handleClearAll}
+        />
+      )}
+      {view === "detail" && selectedSoldier && (
+        <DetailView
+          key={selectedSoldier.id}
+          soldier={selectedSoldier}
+          onUpdate={fields => updateSoldier(selectedSoldier.id, fields)}
+          onDelete={handleDeleteSoldier}
+          onBack={() => setView("list")}
+        />
+      )}
+      {view === "add" && (
+        <AddView onAdd={handleAddSoldier} onBack={() => setView("list")} />
+      )}
+      {view === "settings" && (
+        <SettingsView
+          logoImage={logoImage}
+          setLogoImage={setLogoImage}
+          onClearAll={handleClearAll}
+          onBack={() => setView("list")}
+        />
+      )}
+
+      <div style={{ textAlign: "center", padding: "20px", color: "rgba(255,255,255,0.15)", fontSize: 11 }}>
+        الإدارة العامة لتحقيق الأدلة الجنائية © {new Date().getFullYear()}
+      </div>
+    </div>
+  );
+}
+
+const root = ReactDOM.createRoot(document.getElementById("root"));
+root.render(<App />);
+</script>
+</body>
+</html>
